@@ -1,73 +1,179 @@
 # -*- coding: utf-8 -*-
-import requests
-import re
-import multiprocessing
-from tqdm import *
-p = re.compile("[1-9][0-9]*\n.*-->.*\n")
+from sys import exit
+from re import compile
+from argparse import ArgumentParser
+from multiprocessing import Pool
 
-headers = {
-    'Host': 'translate.yandex.net',
-    'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64; rv:45.0) Gecko/20100101 Firefox/45.0',
-    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-    'Accept-Language': 'en-US,en;q=0.5',
-    'Content-Type': 'application/x-www-form-urlencoded',
-    'Referer': 'https://translate.yandex.com/?lang=ru-zh&text=%E6%9C%AC%E6%9D%A5%E4%BB%8A%E5%A4%A9%E5%BA%94%E8%AF%A5%E6%98%AF%E6%88%91%E6%9D%A5%E5%8F%AB%E6%82%A8%E7%AC%AC%E4%B8%80%E5%A3%B0%E5%A6%88',
-    'Origin': 'https://translate.yandex.com',
-    'Connection': 'keep-alive',
-}
+from colorama import Fore, Back, Style
+from requests import post, exceptions
+from tqdm import tqdm
+
+DEBUG = False
 
 
-def get_translit(text):
-    data = [
-      ('lang', 'zh'),
-      ('text', text),
-    ]
-    r = requests.post('https://translate.yandex.net/translit/translit',
-                      headers=headers, data=data)
+def print_step(text):
+    print(Fore.GREEN + text + '\n' + Style.RESET_ALL)
 
-    return r.text[1:-1].capitalize()
 
-meta = []
-translit = []
-lines = []
+def print_summary(lang, input_file, output_file, api):
+    """Pretty print the script option and settings before launch"""
+    print()
+    print(Fore.RED + Back.WHITE +'Summary' + Style.RESET_ALL)
+    print(Fore.RED + 'About to translit text with the following parameter:' + Style.RESET_ALL)
+    print('Target language: {}{}{}'.format(Fore.GREEN, lang, Style.RESET_ALL))
+    print('Input file: {}{}{}'.format(Fore.GREEN, input_file, Style.RESET_ALL))
+    print('Output file: {}{}{}'.format(Fore.GREEN, output_file, Style.RESET_ALL))
+    print('Selected API: {}{}{}'.format(Fore.GREEN, api, Style.RESET_ALL))
+    print()
 
-with open('sub.srt') as srt:
-    text = srt.read()
-    print('Getting original text lines ...')
-    lines = p.split(text)[1:]
-    print('Getting meta data ...')
-    meta = p.findall(text)
 
-    pool = multiprocessing.Pool(processes=3)
+class Translitterator(object):
+    """Wrapper around translitteration API"""
 
-    print('Translitterating using {}...'.format('Yandex'))
+    yandex_api_headers = {
+        'Host': 'translate.yandex.net',
+        'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64; rv:45.0) Gecko/20100101\
+            Firefox/45.0',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;\
+            q=0.8',
+        'Accept-Language': 'en-US,en;q=0.5',
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Referer': 'https://translate.yandex.com/?lang=ru-zh&text=0',
+        'Origin': 'https://translate.yandex.com',
+        'Connection': 'keep-alive',
+    }
 
-    with tqdm(total=len(lines)) as pbar:
-        for i, _ in tqdm(enumerate(pool.imap(get_translit, lines))):
-            translit.append(_)
-            pbar.update()
+    def __init__(self, lang='zh', api='yandex'):
+        super(Translitterator, self).__init__()
+        self.api = api
+        self.lang = lang
 
-    pbar.close()
-    pool.close()
-    pool.join()
+        if api == 'yandex':
+            self.api_headers = Translitterator.yandex_api_headers
 
-    print('Recreating subtitle file ...')
-if len(meta) != len(translit) != len(lines):
-    print('Warning, the length of the different array don\'t match. Exiting...')
-    print(len(meta))
-    print(len(translit))
-    print(len(lines))
-else:
-    res = zip(meta, translit, lines)
-    res = map(lambda x: dict({'meta': x[0], 'translit': x[1], 'line': x[2]}),
-              res)
+    def translit(self, text, lang=None):
+        """Return translitteration of given text using language"""
+        if lang is None:
+            lang = self.lang
 
-    final_file = u''
-    for sub in list(res):
-        final_file += '{0}{1}\n{2}'.format(sub['meta'],
-                                           sub['translit'],
-                                           sub['line'])
+        if self.api == 'yandex':
+            if len(text) > 100:
+                print('WARNING: Yandex API doesn\'t support request of more than 100\
+                       caracters')
+        data = [
+          ('lang', lang),
+          ('text', text),
+        ]
 
-    print('Writing to disk translitterated subtitle')
-    with open('result.srt', 'w') as out:
-        out.write(final_file)
+        try:
+            r = post('https://translate.yandex.net/translit/translit',
+                     headers=self.api_headers, data=data)
+        except exceptions.RequestException as e:  # This is the correct syntax
+            print(e)
+            exit(1)
+
+        # Remove additional double quote added by yandex translit api
+        return r.text[1:-1].capitalize()
+
+    def parallel_translit(self, texts, lang=None, nb_worker=3,
+                          show_progress=True):
+        """Return translitteration of a list of string in parallel using language
+            Also display a progress bar that can be disable
+        """
+        if lang is None:
+            lang = self.lang
+
+        pool = Pool(processes=3)
+        results = []
+
+        if show_progress:
+            with tqdm(total=len(lines)) as pbar:
+                for i, _ in tqdm(enumerate(pool.imap(self.translit, lines))):
+                    results.append(_)
+                    pbar.update()
+
+            pbar.close()
+            pool.close()
+            pool.join()
+        else:
+            results = map(self.translit, lines)
+
+        return results
+
+
+if __name__ == "__main__":
+    parser = ArgumentParser(description='Translitteration of subtitle')
+
+    parser.add_argument('-l', '--lang', help='Language of subtitle (i.e script used)')
+    parser.add_argument('input_file', help='Path of input subtitle file')
+    parser.add_argument('output_file', nargs='?', help='Path of output file. If not described\
+                        will append \'_result\' to input filename')
+
+    args = parser.parse_args()
+
+    if args.input_file is None:
+        print(u'Usage: sub2pinyin.py [option] filename [output_filename]')
+        exit(2)
+
+    input_file = args.input_file
+
+    if args.lang is None:
+        lang = 'zh'
+    if args.output_file is None:
+        if input_file.find('.srt') != -1:
+            output_file = input_file.replace('.srt', '_result.srt')
+        else:
+            output_file = input_file + '_result'
+
+    api = 'yandex'
+    print_summary(lang, input_file, output_file, api)
+
+    with open(input_file) as srt:
+
+        meta = []
+        translit = []
+        lines = []
+
+        text = srt.read()
+
+        # Regex to split srt file by line's timestamp metadata
+        # i.e: y\n xx.xx.xxx --> xx.xx.xxx\n
+        metadata_pattern = compile("[1-9][0-9]*\n.*-->.*\n")
+
+        # Skip the first element, artefact of regex splitting (empty string '')
+        print_step('[1/4] Extracting original text lines ...')
+        lines = metadata_pattern.split(text)[1:]
+
+        print_step('[2/4] Extracting metadata ...')
+        meta = metadata_pattern.findall(text)
+
+        print_step('[3/4] Translitterating using {}... \n\
+                    It may take a while (> 10 minutes avg)'.format('Yandex'))
+        translitterator = Translitterator(lang='zh')
+        translit = translitterator.parallel_translit(lines)
+
+        print_step('[4/4] Recreating subtitle file ...')
+
+        # Basic check: if the different array don't match in size
+        # (SoA principle)
+        if len(meta) != len(translit) != len(lines):
+            print('Warning, the length of the different array don\'t match.\
+            Exiting...')
+            if DEBUG:
+                print(u'Meta array\'s length:{0}'.format(len(meta)))
+                print(u'Translitteration array\'s length:{0}'.format(len(translit)))
+                print(u'lines array\'s length:{0}'.format(len(lines)))
+        else:
+            transliterate_results = zip(meta, translit, lines)
+            transliterate_results = map(lambda x: dict({'meta': x[0], 'translit': x[1], 'line': x[2]}),
+                                        transliterate_results)
+
+            translit_file_data = u''
+            for sub in list(transliterate_results):
+                translit_file_data += '{0}{1}\n{2}'.format(sub['meta'],
+                                                           sub['translit'],
+                                                           sub['line'])
+
+            print('Writing to disk translitterated subtitle')
+            with open(output_file, 'w') as out:
+                out.write(translit_file_data)
