@@ -15,7 +15,7 @@ def print_step(text):
     print(Fore.GREEN + text + '\n' + Style.RESET_ALL)
 
 
-def print_summary(lang, input_file, output_file, api):
+def print_summary(lang, input_file, output_file, api, workers):
     """Pretty print the script option and settings before launch"""
     print()
     print(Fore.RED + Back.WHITE +'Summary' + Style.RESET_ALL)
@@ -24,6 +24,7 @@ def print_summary(lang, input_file, output_file, api):
     print('Input file: {}{}{}'.format(Fore.GREEN, input_file, Style.RESET_ALL))
     print('Output file: {}{}{}'.format(Fore.GREEN, output_file, Style.RESET_ALL))
     print('Selected API: {}{}{}'.format(Fore.GREEN, api, Style.RESET_ALL))
+    print('Number of worker: {}{}{}'.format(Fore.GREEN, workers, Style.RESET_ALL))
     print()
 
 
@@ -83,7 +84,7 @@ class Translitterator(object):
         if lang is None:
             lang = self.lang
 
-        pool = Pool(processes=3)
+        pool = Pool(processes=nb_worker)
         results = []
 
         if show_progress:
@@ -105,6 +106,7 @@ if __name__ == "__main__":
     parser = ArgumentParser(description='Translitteration of subtitle')
 
     parser.add_argument('-l', '--lang', help='Language of subtitle (i.e script used)')
+    parser.add_argument('-w', '--workers', help='Number of worker to use (default 3)')
     parser.add_argument('input_file', help='Path of input subtitle file')
     parser.add_argument('output_file', nargs='?', help='Path of output file. If not described\
                         will append \'_result\' to input filename')
@@ -119,6 +121,14 @@ if __name__ == "__main__":
 
     if args.lang is None:
         lang = 'zh'
+    else:
+        lang = args.lang
+
+    if args.workers is None:
+        nb_worker = 3
+    else:
+        nb_worker = int(args.workers)
+
     if args.output_file is None:
         if input_file.find('.srt') != -1:
             output_file = input_file.replace('.srt', '_result.srt')
@@ -126,7 +136,7 @@ if __name__ == "__main__":
             output_file = input_file + '_result'
 
     api = 'yandex'
-    print_summary(lang, input_file, output_file, api)
+    print_summary(lang, input_file, output_file, api, nb_worker)
 
     with open(input_file) as srt:
 
@@ -150,7 +160,7 @@ if __name__ == "__main__":
         print_step('[3/4] Translitterating using {}... \n\
                     It may take a while (> 10 minutes avg)'.format('Yandex'))
         translitterator = Translitterator(lang='zh')
-        translit = translitterator.parallel_translit(lines)
+        translit = translitterator.parallel_translit(lines, nb_worker=nb_worker)
 
         print_step('[4/4] Recreating subtitle file ...')
 
